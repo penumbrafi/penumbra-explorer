@@ -8,11 +8,11 @@ describe('getUmPrice', () => {
         // failed and the assertion below got `undefined`.
         global.fetch = jest.fn().mockImplementation(() =>
             Promise.resolve({
-                ok: true,
                 json: () => ({
                     change: -9.99,
                     price: 9999,
                 }),
+                ok: true,
             })
         )
 
