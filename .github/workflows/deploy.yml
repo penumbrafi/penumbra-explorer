@@ -78,6 +78,9 @@ jobs:
           cp -r public .next/standalone/public
           mkdir -p .next/standalone/.next
           cp -r .next/static .next/standalone/.next/static
+          # The build .env holds NEXT_SERVER_ACTIONS_ENCRYPTION_KEY; it must
+          # never reach a workflow artifact or a public release asset.
+          find .next/standalone -maxdepth 2 -name '.env*' -print -delete
           cat > .next/standalone/BUILD_INFO <<INFO
           app=penumbra-explorer-frontend
           sha=${{ github.sha }}
