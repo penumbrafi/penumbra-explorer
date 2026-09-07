@@ -1,0 +1,43 @@
+# /etc/systemd/system/penumbra-explorer-frontend.service
+#
+# Serves the explorer frontend (https://explorer.penumbra.fi, alias
+# https://explorer.rotko.net) on :3000 from the Next.js standalone bundle
+# deployed by .github/workflows/deploy.yml.
+#
+#   /opt/penumbra-explorer-frontend/releases/<sha>/
+#   /opt/penumbra-explorer-frontend/current -> releases/<sha>
+#   /opt/penumbra-explorer-frontend/shared/.env  host-owned, never touched by CI
+[Unit]
+Description=Penumbra Explorer Frontend (Next.js)
+After=network-online.target
+
+[Service]
+Type=simple
+User=web
+Group=web
+WorkingDirectory=/opt/penumbra-explorer-frontend/current
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# nginx in CT1102 proxies to 10.6.78.85:3000, so bind all interfaces.
+Environment=HOSTNAME=0.0.0.0
+# Prefer the /etc/hosts IPv4 mapping to CT1102 over the public AAAA
+# (the v6 VIP is not reachable from vmbr1). Previously a drop-in.
+Environment=NODE_OPTIONS=--dns-result-order=ipv4first
+EnvironmentFile=-/opt/penumbra-explorer-frontend/shared/.env
+ExecStart=/usr/bin/node /opt/penumbra-explorer-frontend/current/server.js
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# Next.js writes its image-optimization cache under .next/cache at runtime.
+ReadWritePaths=/opt/penumbra-explorer-frontend/releases
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
