@@ -1,0 +1,35 @@
+# Lint, typecheck and test on pull requests and pushes to main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # `env-cmd` (used by the build/test scripts) fails when ./.env is absent.
+      - name: seed build env
+        run: cp .env.penumbrafi .env
+
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run stylelint
+      - run: npm test

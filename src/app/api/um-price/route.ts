@@ -37,12 +37,13 @@ export async function GET() {
         }
         return NextResponse.json(
             {
-                price: data[0].current_price,
                 change: data[0].price_change_percentage_24h,
+                price: data[0].current_price,
             },
             {
                 headers: {
-                    'cache-control': 'public, s-maxage=60, stale-while-revalidate=300',
+                    'cache-control':
+                        'public, s-maxage=60, stale-while-revalidate=300',
                 },
             }
         )

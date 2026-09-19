@@ -84,28 +84,32 @@ and written to file with `npm run test:coverage`.
 
 ## Environments
 
-The following environments are hosted and auto-scaled on Google Cloud:
+One environment, `production`, hosted in CT1105 (`penumbra-web2`) behind the
+nginx in CT1102:
 
-- Development (`main`): https://dev.explorer.penumbra.pklabs.me
-- Staging (`staging`): https://explorer.penumbra.pklabs.me
-- Production (`production`): https://explorer.penumbra.zone
+- https://explorer.penumbra.fi (alias https://explorer.rotko.net)
 
 ## CI/CD
 
-The GitHub Actions workflow `.github/workflows/gcp.yaml` handles all environment
-deployments. After running checks and tests it triggers Google Cloud Build that
-deploys to Google Cloud Run.
+`.github/workflows/deploy.yml` builds the app on every push to `main` and on
+tags, packs the Next.js standalone bundle as
+`penumbra-explorer-frontend-<sha>.tar.zst`, uploads it as a workflow artifact
+(and attaches it to the GitHub release on tags), then rsyncs it to
+`/opt/penumbra-explorer-frontend/releases/<sha>` on the host, flips the
+`current` symlink and restarts `penumbra-explorer-frontend.service`.
 
-Development is deployed continuously on push with `.github/workflows/dev.yaml`
-as entry point. Staging is also deployed on push with
-`.github/workflows/staging.yaml` as entry point and production deployments are
-triggered manually in the GitHub Actions web interface with
-`.github/workflows/prod.yaml` as entry point.
+Nothing is built on the server. `.github/workflows/ci.yml` runs lint,
+typecheck, stylelint and jest on pull requests.
+
+See `deploy/README.md` for the secrets, the systemd unit and the one-time host
+setup.
 
 ## Docker
 
 The project can also be run as a Docker container in production mode. Each
 environment has its own configuration located in the `docker` folder.
+Only the `dev` configuration is kept; production runs from the standalone
+bundle described above, not from a container.
 
 Build and run it using the following commands:
 

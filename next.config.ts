@@ -1,6 +1,9 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
+    // Self-contained server bundle: CI tars .next/standalone and the host
+    // runs `node server.js` with no node_modules install. See deploy/README.md.
+    output: 'standalone',
     poweredByHeader: false,
     webpack: config => {
         const rules = config.module.rules

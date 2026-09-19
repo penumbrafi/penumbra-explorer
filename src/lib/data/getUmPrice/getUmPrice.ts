@@ -7,8 +7,8 @@ import { UmPriceData } from '@/lib/types'
 const url = '/api/um-price'
 
 interface Data {
-    price: number
     change: number
+    price: number
 }
 
 const getUmPrice = async (): Promise<UmPriceData | undefined> => {

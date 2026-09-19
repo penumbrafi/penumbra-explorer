@@ -1,0 +1,173 @@
+# Build the explorer frontend in Actions and ship it to CT1105.
+#
+# Next.js `output: 'standalone'` produces a self-contained server bundle that
+# is packed as penumbra-explorer-frontend-<sha>.tar.zst, uploaded as a workflow
+# artifact, attached to the GitHub release on tags, and rsynced into
+# /opt/penumbra-explorer-frontend/releases/<sha>.
+name: deploy explorer frontend
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+concurrency:
+  group: deploy-explorer-frontend
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ARTIFACT: penumbra-explorer-frontend-${{ github.sha }}
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: write build env
+        env:
+          # Every one of these is inlined at build time, so it has to come from
+          # repository variables rather than the host .env. The server-actions
+          # key must match the value in the host env file at runtime.
+          BASE_URL: ${{ vars.BASE_URL }}
+          NEXT_PUBLIC_APP_VERSION: ${{ vars.NEXT_PUBLIC_APP_VERSION }}
+          NEXT_PUBLIC_ENV_NAME: ${{ vars.NEXT_PUBLIC_ENV_NAME }}
+          NEXT_PUBLIC_GRAPHQL_HOST: ${{ vars.NEXT_PUBLIC_GRAPHQL_HOST }}
+          NEXT_PUBLIC_FATHOM_ID: ${{ vars.NEXT_PUBLIC_FATHOM_ID }}
+          NO_INDEX: ${{ vars.NO_INDEX }}
+          ENCRYPTION_KEY: ${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          # Fall back to the checked-in reference values when a variable is unset.
+          cp .env.penumbrafi .env
+          set_var() {
+            [ -n "$2" ] || return 0
+            grep -q "^$1=" .env && sed -i "s|^$1=.*|$1=$2|" .env || printf '%s=%s\n' "$1" "$2" >> .env
+          }
+          set_var BASE_URL "$BASE_URL"
+          set_var NEXT_PUBLIC_APP_VERSION "$NEXT_PUBLIC_APP_VERSION"
+          set_var NEXT_PUBLIC_ENV_NAME "$NEXT_PUBLIC_ENV_NAME"
+          set_var NEXT_PUBLIC_GRAPHQL_HOST "$NEXT_PUBLIC_GRAPHQL_HOST"
+          set_var NEXT_PUBLIC_FATHOM_ID "$NEXT_PUBLIC_FATHOM_ID"
+          set_var NO_INDEX "$NO_INDEX"
+          set_var NEXT_SERVER_ACTIONS_ENCRYPTION_KEY "$ENCRYPTION_KEY"
+          # never print values
+          cut -d= -f1 .env
+
+      - name: build
+        run: npm run build
+
+      - name: assemble standalone tree
+        run: |
+          set -euo pipefail
+          test -f .next/standalone/server.js
+          cp -r public .next/standalone/public
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+          # The build .env holds NEXT_SERVER_ACTIONS_ENCRYPTION_KEY; it must
+          # never reach a workflow artifact or a public release asset.
+          find .next/standalone -maxdepth 2 -name '.env*' -print -delete
+          cat > .next/standalone/BUILD_INFO <<INFO
+          app=penumbra-explorer-frontend
+          sha=${{ github.sha }}
+          ref=${{ github.ref }}
+          run_id=${{ github.run_id }}
+          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          INFO
+
+      - name: pack artifact
+        run: |
+          set -euo pipefail
+          tar --zstd -C .next/standalone -cf "${ARTIFACT}.tar.zst" .
+          ls -lh "${ARTIFACT}.tar.zst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ env.ARTIFACT }}.tar.zst
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: attach to release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}.tar.zst
+          fail_on_unmatched_files: true
+
+  deploy:
+    name: deploy to CT1105
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      APP_DIR: /opt/penumbra-explorer-frontend
+      SERVICE: penumbra-explorer-frontend.service
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+
+      - name: unpack
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+          tar --zstd -C payload -xf "${ARTIFACT}.tar.zst"
+
+      - name: configure ssh
+        uses: ./.github/actions/ssh-deploy
+        with:
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          jump-host: ${{ secrets.DEPLOY_HOST }}
+          target-host: ${{ secrets.DEPLOY_CT }}
+
+      - name: ship release
+        run: |
+          set -euo pipefail
+          ssh target "mkdir -p '${APP_DIR}/releases/${SHA}' '${APP_DIR}/shared'"
+          rsync -a --delete -e ssh payload/ "target:${APP_DIR}/releases/${SHA}/"
+
+      - name: activate
+        run: |
+          set -euo pipefail
+          ssh target "APP_DIR='${APP_DIR}' SERVICE='${SERVICE}' SHA='${SHA}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$APP_DIR"
+          ln -sfn "releases/$SHA" current.tmp
+          mv -Tf current.tmp current
+          ls -1dt releases/*/ | tail -n +6 | xargs -r rm -rf
+          sudo /usr/bin/systemctl restart "$SERVICE"
+          for _ in $(seq 1 20); do
+            systemctl is-active --quiet "$SERVICE" && break
+            sleep 2
+          done
+          systemctl is-active "$SERVICE"
+          REMOTE
+
+      - name: smoke test
+        run: ssh target 'curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3000/'
