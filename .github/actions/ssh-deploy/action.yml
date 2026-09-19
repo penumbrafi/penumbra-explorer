@@ -1,7 +1,7 @@
 name: 'Configure deploy SSH'
 description: >
   Writes the deploy key, pinned host keys and an ssh config that reaches the
-  application container (CT1105) through the bkk06 jump host. After this action
+  application container (CT1199) through the bkk07 jump host. After this action
   runs, `ssh target` and `rsync -e ssh ... target:` work.
 inputs:
   ssh-key:

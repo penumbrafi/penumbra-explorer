@@ -1,4 +1,4 @@
-# Build the explorer frontend in Actions and ship it to CT1105.
+# Build the explorer frontend in Actions and ship it to CT1199.
 #
 # Next.js `output: 'standalone'` produces a self-contained server bundle that
 # is packed as penumbra-explorer-frontend-<sha>.tar.zst, uploaded as a workflow
@@ -42,7 +42,10 @@ jobs:
         env:
           # Every one of these is inlined at build time, so it has to come from
           # repository variables rather than the host .env. The server-actions
-          # key must match the value in the host env file at runtime.
+          # key must match the value in the host env file at runtime, and is a
+          # *repository* secret: this job deliberately runs outside the
+          # `production` environment (only `deploy` needs those credentials),
+          # so an environment secret would expand to the empty string here.
           BASE_URL: ${{ vars.BASE_URL }}
           NEXT_PUBLIC_APP_VERSION: ${{ vars.NEXT_PUBLIC_APP_VERSION }}
           NEXT_PUBLIC_ENV_NAME: ${{ vars.NEXT_PUBLIC_ENV_NAME }}
@@ -117,7 +120,7 @@ jobs:
           fail_on_unmatched_files: true
 
   deploy:
-    name: deploy to CT1105
+    name: deploy to CT1199
     needs: build
     runs-on: ubuntu-latest
     environment: production

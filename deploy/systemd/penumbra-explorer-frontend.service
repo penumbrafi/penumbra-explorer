@@ -18,7 +18,7 @@ Group=web
 WorkingDirectory=/opt/penumbra-explorer-frontend/current
 Environment=NODE_ENV=production
 Environment=PORT=3000
-# nginx in CT1102 proxies to 10.6.78.85:3000, so bind all interfaces.
+# nginx in CT1102 proxies to 10.7.78.85:3000, so bind all interfaces.
 Environment=HOSTNAME=0.0.0.0
 # Prefer the /etc/hosts IPv4 mapping to CT1102 over the public AAAA
 # (the v6 VIP is not reachable from vmbr1). Previously a drop-in.
