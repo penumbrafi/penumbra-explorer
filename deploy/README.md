@@ -1,7 +1,7 @@
 # Deploying the Penumbra explorer frontend
 
 The build runs in GitHub Actions from `main` or a tag and is shipped to
-CT1105 (`penumbra-web2`) over ssh. Nothing is built on the host.
+CT1199 (`penumbra-web2`) over ssh. Nothing is built on the host.
 
 | workflow | what it does |
 | --- | --- |
@@ -28,25 +28,32 @@ and started with `npm start`; the new path matches the unit name and keeps
 
 ## Transport
 
-CT1105 has sshd but only an internal address (`10.6.78.85`), so Actions uses
-`ProxyJump` through the bkk06 hypervisor into a forwarding-only account. See
+CT1199 has sshd but only an internal address (`10.7.78.85`), so Actions uses
+`ProxyJump` through the bkk07 hypervisor into a forwarding-only account. See
 `.github/actions/ssh-deploy`.
 
 ## Secrets and variables to create
 
-GitHub **Environment** `production`, with these environment secrets:
+GitHub **Environment** `production` (only the `deploy` job runs in it), with
+these environment secrets:
 
 | secret | value |
 | --- | --- |
 | `DEPLOY_SSH_KEY` | ed25519 private key for the deploy account |
-| `DEPLOY_HOST` | public address of bkk06 (`160.22.180.6`) |
-| `DEPLOY_CT` | CT1105 on the internal network (`10.6.78.85`) |
-| `DEPLOY_KNOWN_HOSTS` | pinned host keys, below |
+| `DEPLOY_HOST` | public address of bkk07 (`160.22.180.7`) |
+| `DEPLOY_CT` | CT1199 on the internal network (`10.7.78.85`) |
+| `DEPLOY_KNOWN_HOSTS` | pinned host keys, both lines below |
+
+**Repository** secret (the `build` job is not in an environment, so an
+environment secret would silently expand to the empty string there):
+
+| secret | value |
+| --- | --- |
 | `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` | base64 key; **must be identical** to the one in the host `shared/.env`, otherwise server actions fail after a deploy |
 
 ```
-160.22.180.6 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMFjR7GW0By58m5FH+OBZ95VBB5ojplZa8C5UmjV731b
-10.6.78.85 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBAWg1G4VempqSlmJtB+1XItpF7fHD8x+A3SBgJA0VQ1
+160.22.180.7 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP6SkALaJpxjUVzmxrzWbq3pDNICOdZeyRNOXMWQHA/D
+10.7.78.85 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBAWg1G4VempqSlmJtB+1XItpF7fHD8x+A3SBgJA0VQ1
 ```
 
 Repository **variables** (not secret; all are inlined into the bundle at build
@@ -64,37 +71,116 @@ back to the values in `.env.penumbrafi`:
 
 ## One-time host setup
 
-The jump account on bkk06 and the `web` account inside CT1105 are shared with
-the other penumbrafi repos — set them up once, following
-`penumbrafi/web`'s `deploy/README.md`. In addition, inside CT1105:
+### bkk07 — forwarding-only jump account
+
+`ssh-deploy` reaches the container with `ProxyJump`, i.e. an `ssh -W` direct
+TCP forward. The jump account therefore needs no shell, no sudo and no
+`pct` privileges — only permission to open one TCP channel to `10.7.78.85:22`.
 
 ```sh
-install -d -o web -g web /opt/penumbra-explorer-frontend/releases \
-                         /opt/penumbra-explorer-frontend/shared
+useradd -m -s /usr/sbin/nologin deploy-jump
+ssh-keygen -t ed25519 -N '' -C deploy@penumbra-explorer \
+           -f /root/deploy-keys/penumbra-explorer
 
-# carry the existing runtime env across unchanged (it holds the
-# server-actions encryption key)
-cp -a /opt/penumbra-explorer/.env /opt/penumbra-explorer-frontend/shared/.env
-chown web:web /opt/penumbra-explorer-frontend/shared/.env
-chmod 600 /opt/penumbra-explorer-frontend/shared/.env
+install -d -m 700 -o deploy-jump -g deploy-jump /home/deploy-jump/.ssh
+printf 'restrict,port-forwarding,permitopen="10.7.78.85:22" %s\n' \
+    "$(cat /root/deploy-keys/penumbra-explorer.pub)" \
+    > /home/deploy-jump/.ssh/authorized_keys
+chown deploy-jump:deploy-jump /home/deploy-jump/.ssh/authorized_keys
+chmod 600 /home/deploy-jump/.ssh/authorized_keys
 
+# Appended to the END of /etc/ssh/sshd_config, not dropped into
+# sshd_config.d/: the Include sits on the first line of sshd_config, so a
+# Match block in an included file would swallow every global keyword that
+# follows it (PermitRootLogin among them).
+cat >> /etc/ssh/sshd_config <<'CFG'
+
+Match User deploy-jump
+    AllowTcpForwarding local
+    PermitOpen 10.7.78.85:22
+    PermitTTY no
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTunnel no
+    ForceCommand /usr/sbin/nologin
+CFG
+sshd -t && systemctl reload ssh
+```
+
+A `from=` restriction is not usable: GitHub-hosted runners have no stable
+source addresses. The account is confined by `permitopen`/`PermitOpen`
+instead. Confirm the confinement rather than assuming it:
+
+```sh
+ssh -F <cfg> -W 10.7.78.85:22   jump   # SSH-2.0-OpenSSH_...
+ssh -F <cfg> -W 10.7.78.85:3000 jump   # administratively prohibited
+ssh -F <cfg> -W 10.7.0.1:22     jump   # administratively prohibited
+ssh -F <cfg> jump id                   # This account is currently not available.
+```
+
+### CT1199 — `web` account, release layout and unit
+
+The private key above is used for both hops, so the same public key goes into
+the container:
+
+```sh
+pct exec 1199 -- install -d -m 700 -o web -g web /home/web/.ssh
+pct push 1199 /root/deploy-keys/penumbra-explorer.pub \
+    /home/web/.ssh/authorized_keys --user 1000 --group 1000 --perms 600
+
+pct exec 1199 -- apt-get install -y rsync zstd   # neither is present by default
+
+pct exec 1199 -- install -d -o web -g web \
+    /opt/penumbra-explorer-frontend/releases /opt/penumbra-explorer-frontend/shared
+```
+
+`shared/.env` is host-owned and never touched by CI. Carry the values across
+from the old in-place checkout, but **generate a fresh**
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (`openssl rand -base64 32`) and set the
+identical value as the repository secret — the build inlines it and the
+runtime reads it from this file, so the two must match:
+
+```sh
+pct exec 1199 -- chown web:web /opt/penumbra-explorer-frontend/shared/.env
+pct exec 1199 -- chmod 600 /opt/penumbra-explorer-frontend/shared/.env
+```
+
+The `activate` step runs `sudo /usr/bin/systemctl restart` as `web`, which
+needs exactly one sudoers rule and nothing wider:
+
+```sh
+pct exec 1199 -- tee /etc/sudoers.d/penumbra-explorer-deploy <<'SUDO'
+web ALL=(root) NOPASSWD: /usr/bin/systemctl restart penumbra-explorer-frontend.service
+SUDO
+pct exec 1199 -- visudo -cf /etc/sudoers.d/penumbra-explorer-deploy
+```
+
+Finally the unit. It keeps the name the in-place deployment used, so the first
+CI `activate` restarts straight into the standalone bundle:
+
+```sh
 install -m 644 deploy/systemd/penumbra-explorer-frontend.service /etc/systemd/system/
 rm -rf /etc/systemd/system/penumbra-explorer-frontend.service.d  # drop-in folded in
 systemctl daemon-reload
 ```
 
-`rsync` and `zstd` must be installed in CT1105 (`apt-get install rsync zstd`);
-neither is present by default.
+Run `daemon-reload` only once `shared/.env` exists and a deploy is about to be
+triggered: from that moment the unit expects `current/server.js`, and a crash
+of the old process would restart into a path that does not exist yet.
 
-The old `/opt/penumbra-explorer` checkout can be removed once the first CI
-deploy is verified.
+Verify the whole chain from bkk07 before spending a CI run:
+
+```sh
+ssh -i /root/deploy-keys/penumbra-explorer -o IdentitiesOnly=yes \
+    -J deploy-jump@160.22.180.7 web@10.7.78.85 'sudo -n -l'
+```
+
+The old `/opt/penumbra-explorer` checkout is left in place as the rollback
+path and can be removed once a few CI deploys have been verified.
 
 Then add the vhost from `deploy/nginx-penumbra.fi.conf.example` in CT1102.
 
 ## Known unverified
 
-* GitHub-hosted runner reachability to bkk06 `:22` (the nftables ruleset
-  accepts `tcp dport 22` from anywhere, but it has not been exercised from a
-  runner).
 * `npm run stylelint` / `npm test` have not been run in this environment; if
   either is broken on `main` today, drop that step from `ci.yml`.

@@ -33,7 +33,7 @@
     "graphql-ws": "^6.0.4",
     "lucide-react": "^0.541.0",
     "motion": "^12.4.10",
-    "next": "^15.5.15",
+    "next": "^15.5.25",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-error-boundary": "^6.0.0",
