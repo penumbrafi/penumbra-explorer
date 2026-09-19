@@ -89,13 +89,19 @@ printf 'restrict,port-forwarding,permitopen="10.7.78.85:22" %s\n' \
 chown deploy-jump:deploy-jump /home/deploy-jump/.ssh/authorized_keys
 chmod 600 /home/deploy-jump/.ssh/authorized_keys
 
-cat > /etc/ssh/sshd_config.d/10-deploy-jump.conf <<'CFG'
+# Appended to the END of /etc/ssh/sshd_config, not dropped into
+# sshd_config.d/: the Include sits on the first line of sshd_config, so a
+# Match block in an included file would swallow every global keyword that
+# follows it (PermitRootLogin among them).
+cat >> /etc/ssh/sshd_config <<'CFG'
+
 Match User deploy-jump
     AllowTcpForwarding local
     PermitOpen 10.7.78.85:22
     PermitTTY no
     X11Forwarding no
     AllowAgentForwarding no
+    PermitTunnel no
     ForceCommand /usr/sbin/nologin
 CFG
 sshd -t && systemctl reload ssh
@@ -103,7 +109,14 @@ sshd -t && systemctl reload ssh
 
 A `from=` restriction is not usable: GitHub-hosted runners have no stable
 source addresses. The account is confined by `permitopen`/`PermitOpen`
-instead — it can reach exactly one host and port and nothing else.
+instead. Confirm the confinement rather than assuming it:
+
+```sh
+ssh -F <cfg> -W 10.7.78.85:22   jump   # SSH-2.0-OpenSSH_...
+ssh -F <cfg> -W 10.7.78.85:3000 jump   # administratively prohibited
+ssh -F <cfg> -W 10.7.0.1:22     jump   # administratively prohibited
+ssh -F <cfg> jump id                   # This account is currently not available.
+```
 
 ### CT1199 — `web` account, release layout and unit
 
