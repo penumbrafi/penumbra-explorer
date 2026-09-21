@@ -1,6 +1,6 @@
 // istanbul ignore file
-import { ChainRegistryClient } from '@penumbra-labs/registry'
 import { ActionViewProps } from '@penumbra-zone/ui/ActionView'
+import { ChainRegistryClient } from '@penumbrafi/registry'
 import { create } from 'zustand/react'
 
 let initializationAttempted = false
